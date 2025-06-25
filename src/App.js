@@ -5,17 +5,12 @@ const API_URL = 'http://localhost:8000';
 
 // Main App Component
 export default function App() {
-    const [page, setPage] = useState('taskList');
+    const [page, setPage] = useState('dashboard');
     const [currentTask, setCurrentTask] = useState(null);
 
-    const navigateToWorkspace = (task) => {
+    const navigateTo = (targetPage, task = null) => {
+        setPage(targetPage);
         setCurrentTask(task);
-        setPage('labeling');
-    };
-
-    const navigateToList = () => {
-        setCurrentTask(null);
-        setPage('taskList');
     };
     
     const buttonProps = {
@@ -30,483 +25,378 @@ export default function App() {
                 .button.hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
                 .primary.hover { background-color: #008a79 !important; }
                 .secondary.hover { background-color: #5a6169 !important; }
-                .danger.hover { background-color: #c0392b !important; }
-
-                @keyframes fadeIn {
-                    from { opacity: 0; transform: translateY(-10px); }
-                    to { opacity: 1; transform: translateY(0); }
-                }
+                @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
             `}</style>
             <header style={styles.header}>
-                <h1 onClick={navigateToList} style={styles.headerH1}>Image Labeling Tool</h1>
+                <div style={styles.headerContent}>
+                    <h1 onClick={() => navigateTo('dashboard')} style={styles.headerH1}>Image Labeling Tool</h1>
+                    <nav style={styles.nav}>
+                        <button onClick={() => navigateTo('dashboard')} style={{...styles.navLink, ...(page === 'dashboard' ? styles.activeNavLink : {})}}>Dashboard</button>
+                        <button onClick={() => navigateTo('taskList')} style={{...styles.navLink, ...(page === 'taskList' ? styles.activeNavLink : {})}}>Tasks</button>
+                    </nav>
+                </div>
             </header>
             <main style={styles.main}>
-                {page === 'taskList' && <TaskListPage onStartLabeling={navigateToWorkspace} buttonProps={buttonProps} />}
-                {page === 'labeling' && currentTask && <LabelingWorkspace task={currentTask} onBack={navigateToList} buttonProps={buttonProps} />}
+                {page === 'dashboard' && <DashboardPage onStartLabeling={(task) => navigateTo('labeling', task)} buttonProps={buttonProps}/>}
+                {page === 'taskList' && <TaskListPage onStartLabeling={(task) => navigateTo('labeling', task)} buttonProps={buttonProps} />}
+                {page === 'labeling' && currentTask && <LabelingWorkspace task={currentTask} onBack={() => navigateTo('taskList')} buttonProps={buttonProps} />}
             </main>
         </div>
     );
 }
 
-// --- PAGES ---
+// --- MODAL COMPONENT ---
+function ProcessTaskModal({ task, onClose, buttonProps }) {
+    const [labels, setLabels] = useState([]);
+    const [selectedLabelIds, setSelectedLabelIds] = useState(new Set());
+    const [action, setAction] = useState('blacken');
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        const fetchLabels = async () => {
+            try {
+                const response = await fetch(`${API_URL}/api/labels`);
+                if (!response.ok) throw new Error('Could not fetch labels.');
+                setLabels(await response.json());
+            } catch (err) {
+                setError(err.message);
+            }
+        };
+        fetchLabels();
+    }, []);
+
+    const handleLabelToggle = (labelId) => {
+        const newSet = new Set(selectedLabelIds);
+        if (newSet.has(labelId)) {
+            newSet.delete(labelId);
+        } else {
+            newSet.add(labelId);
+        }
+        setSelectedLabelIds(newSet);
+    };
+
+    const handleDownload = async () => {
+        if (selectedLabelIds.size === 0) {
+            alert('Please select at least one label.');
+            return;
+        }
+        setIsLoading(true);
+        setError('');
+        try {
+            const response = await fetch(`${API_URL}/api/tasks/${task.id}/process`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, label_ids: Array.from(selectedLabelIds) }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || `Failed to process ${action}.`);
+            }
+
+            const disposition = response.headers.get('content-disposition');
+            let filename = `task_${task.id}_${action}.zip`;
+            if (disposition) {
+                const matches = /filename="([^"]+)"/.exec(disposition);
+                if (matches?.[1]) filename = matches[1];
+            }
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+            onClose();
+
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    
+    return (
+        <div style={styles.modalBackdrop}>
+            <div style={styles.modalContent}>
+                <h3 style={styles.modalTitle}>Process Task: {task.name}</h3>
+                
+                <div style={styles.modalSection}>
+                    <label style={styles.modalLabel}>1. Select Action</label>
+                    <div style={styles.radioGroup}>
+                        <label><input type="radio" value="blacken" checked={action === 'blacken'} onChange={(e) => setAction(e.target.value)} /> Blacken Boxes</label>
+                        <label><input type="radio" value="blur" checked={action === 'blur'} onChange={(e) => setAction(e.target.value)} /> Blur Boxes</label>
+                        <label><input type="radio" value="crop" checked={action === 'crop'} onChange={(e) => setAction(e.target.value)} /> Crop Boxes</label>
+                    </div>
+                </div>
+
+                <div style={styles.modalSection}>
+                    <label style={styles.modalLabel}>2. Select Labels to Process</label>
+                    <div style={styles.checkboxGroup}>
+                        {labels.length > 0 ? labels.map(label => (
+                            <label key={label.id} style={styles.checkboxLabel}>
+                                <input type="checkbox" checked={selectedLabelIds.has(label.id)} onChange={() => handleLabelToggle(label.id)} />
+                                {label.name}
+                            </label>
+                        )) : <p>Loading labels...</p>}
+                    </div>
+                </div>
+                
+                {error && <p style={styles.modalError}>{error}</p>}
+
+                <div style={styles.modalActions}>
+                    <button onClick={onClose} {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} disabled={isLoading}>Cancel</button>
+                    <button onClick={handleDownload} {...buttonProps} className="button primary" style={styles.button} disabled={isLoading || selectedLabelIds.size === 0}>
+                        {isLoading ? 'Processing...' : 'Download ZIP'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+
+// --- DASHBOARD & OTHER PAGES ---
+function DashboardPage({ onStartLabeling, buttonProps }) {
+    const [stats, setStats] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        const fetchStats = async () => {
+            try {
+                const response = await fetch(`${API_URL}/api/dashboard-summary`);
+                if (!response.ok) throw new Error('Could not fetch dashboard data.');
+                const data = await response.json();
+                setStats(data);
+            } catch (err) {
+                setError(err.message);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchStats();
+    }, []);
+    
+    if (isLoading) return <div style={styles.loadingText}>Loading Dashboard...</div>;
+    if (error) return <div style={styles.errorText}>Error: {error}</div>;
+    if (!stats) return null;
+
+    return (
+        <div style={styles.dashboardContainer}>
+            <div style={styles.statGrid}>
+                <StatCard title="Total Tasks" value={stats.total_tasks} />
+                <StatCard title="Total Images" value={stats.total_images} />
+                <StatCard title="Total Annotations" value={stats.total_annotations} />
+                <StatCard title="Total Labels" value={stats.total_labels} />
+            </div>
+            <div style={styles.chartsGrid}>
+                <ChartCard title="Task Status">
+                    <DonutChart data={stats.task_status_counts} />
+                </ChartCard>
+                <ChartCard title="Top 5 Labels">
+                    <BarChart data={stats.top_labels} />
+                </ChartCard>
+                 <ChartCard title="Recent Tasks">
+                    <RecentTasksList tasks={stats.recent_tasks} onStartLabeling={onStartLabeling} buttonProps={buttonProps}/>
+                </ChartCard>
+            </div>
+        </div>
+    );
+}
 
 function TaskListPage({ onStartLabeling, buttonProps }) {
     const [tasks, setTasks] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [processingTask, setProcessingTask] = useState(null);
 
     const fetchTasks = useCallback(async () => {
-        // Don't set loading to true here to prevent flicker during polling
         try {
             const response = await fetch(`${API_URL}/api/tasks`);
             if (!response.ok) throw new Error('Failed to fetch tasks');
-            const data = await response.json();
-            setTasks(data);
-        } catch (err) {
-            setError(err.message);
-        } finally {
-            setIsLoading(false); // Only set loading false once
-        }
+            setTasks(await response.json());
+        } catch (err) { setError(err.message); } 
+        finally { setIsLoading(false); }
     }, []);
 
-    useEffect(() => {
-        fetchTasks();
-        const interval = setInterval(fetchTasks, 5000); 
-        return () => clearInterval(interval);
-    }, [fetchTasks]);
+    useEffect(() => { fetchTasks(); const interval = setInterval(fetchTasks, 5000); return () => clearInterval(interval); }, [fetchTasks]);
     
     const handleExport = async (taskId) => {
         try {
             const response = await fetch(`${API_URL}/api/tasks/${taskId}/export`);
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Failed to download file.');
-            }
+            if (!response.ok) throw new Error((await response.json()).detail || 'Failed to download file.');
             const disposition = response.headers.get('content-disposition');
             let filename = `task_${taskId}_annotations.xlsx`;
-            if (disposition && disposition.indexOf('attachment') !== -1) {
-                const filenameRegex = /filename="([^"]+)"/;
-                const matches = filenameRegex.exec(disposition);
+            if (disposition?.includes('attachment')) {
+                const matches = /filename="([^"]+)"/.exec(disposition);
                 if (matches?.[1]) filename = matches[1];
             }
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
+            a.style.display = 'none'; a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click(); a.remove();
             window.URL.revokeObjectURL(url);
-            a.remove();
-        } catch (error) {
-            alert(`Could not export: ${error.message}`);
-        }
+        } catch (error) { alert(`Could not export: ${error.message}`); }
     };
 
     if (isLoading) return <div style={styles.loadingText}>Loading tasks...</div>;
     if (error) return <div style={styles.errorText}>Error: {error}</div>;
 
     return (
-        <div style={styles.taskListContainer}>
-            <h2 style={styles.pageTitle}>Tasks</h2>
-            <UploadTask onTaskUploaded={fetchTasks} buttonProps={buttonProps} />
-            <div style={styles.taskList}>
-                {tasks.length === 0 && <p>No tasks found. Upload a new one to get started.</p>}
-                {tasks.map(task => (
-                    <div key={task.id} style={styles.taskItem}>
-                        <div style={styles.taskInfo}>
-                            <strong>{task.name}</strong>
-                            <span style={{...styles.status, ...styles[task.status]}}>{task.status.replace(/_/g, ' ')}</span>
-                        </div>
-                        <div style={styles.taskActions}>
-                             {(task.status === 'ready' || task.status === 'in_progress') && <button {...buttonProps} className="button primary" style={styles.button} onClick={() => onStartLabeling(task)}>Start Labeling</button>}
-                             {task.status === 'completed' && <button {...buttonProps} className="button primary" style={styles.button} onClick={() => onStartLabeling(task)}>View</button>}
-                             {(task.status === 'ready' || task.status === 'in_progress' || task.status === 'completed') && (
+        <>
+            {processingTask && <ProcessTaskModal task={processingTask} onClose={() => setProcessingTask(null)} buttonProps={buttonProps} />}
+            <div style={styles.taskListContainer}>
+                <h2 style={styles.pageTitle}>Tasks</h2>
+                <UploadTask onTaskUploaded={fetchTasks} buttonProps={buttonProps} />
+                <div style={styles.taskList}>
+                    {tasks.map(task => (
+                        <div key={task.id} style={styles.taskItem}>
+                            <div style={styles.taskInfo}>
+                                <strong>{task.name}</strong>
+                                <span style={{...styles.status, ...styles[task.status]}}>{task.status.replace(/_/g, ' ')}</span>
+                            </div>
+                            <div style={styles.taskActions}>
+                                <button {...buttonProps} className="button primary" style={styles.button} onClick={() => onStartLabeling(task)}>
+                                    {task.status === 'completed' ? 'View' : 'Label'}
+                                </button>
+                                <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => setProcessingTask(task)}>Process & Download</button>
                                 <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => handleExport(task.id)}>Export to Excel</button>
-                             )}
+                            </div>
                         </div>
-                    </div>
-                ))}
+                    ))}
+                </div>
             </div>
-        </div>
+        </>
     );
 }
 
+// --- ALL OTHER COMPONENTS ---
+function StatCard({ title, value }) { return ( <div style={styles.statCard}><h3 style={styles.statCardTitle}>{title}</h3><p style={styles.statCardValue}>{value}</p></div>); }
+function ChartCard({ title, children }) { return ( <div style={styles.chartCard}><h3 style={styles.chartCardTitle}>{title}</h3><div style={styles.chartCardContent}>{children}</div></div>); }
+function DonutChart({ data }) {
+    const statusColors = { processing: '#f39c12', ready: '#3498db', in_progress: '#8e44ad', completed: '#27ae60', failed: '#c0392b' };
+    const total = Object.values(data).reduce((sum, val) => sum + val, 0);
+    if (total === 0) return <p style={{color: '#888'}}>No data to display.</p>;
+    let cumulativePercent = 0;
+    const gradients = Object.entries(data).map(([key, value]) => {
+        const percent = (value / total) * 100, color = statusColors[key] || '#7f8c8d', start = cumulativePercent;
+        cumulativePercent += percent;
+        return `${color} ${start}% ${cumulativePercent}%`;
+    });
+    return (<div style={styles.donutChartContainer}><div style={{...styles.donut, background: `conic-gradient(${gradients.join(', ')})`}}></div><div style={styles.legend}>{Object.entries(data).map(([key, value]) => (<div key={key} style={styles.legendItem}><span style={{...styles.legendColorBox, backgroundColor: statusColors[key] || '#7f8c8d'}}></span><span style={styles.legendText}>{key.replace(/_/g, ' ')} ({value})</span></div>))}</div></div>);
+}
+function BarChart({ data }) {
+    if (!data || data.length === 0) return <p style={{color: '#888'}}>No annotations yet.</p>;
+    const maxCount = Math.max(...data.map(item => item.count), 0);
+    return (<div style={styles.barChartContainer}>{data.map((item, index) => (<div key={index} style={styles.barRow}><span style={styles.barLabel}>{item.name}</span><div style={styles.barWrapper}><div style={{...styles.bar, width: `${(item.count / maxCount) * 100}%`}}></div></div><span style={styles.barValue}>{item.count}</span></div>))}</div>);
+}
+function RecentTasksList({ tasks, onStartLabeling, buttonProps }) {
+    if (!tasks || tasks.length === 0) return <p style={{color: '#888'}}>No tasks have been created yet.</p>;
+    return (<div style={styles.recentTasksContainer}>{tasks.map(task => (<div key={task.id} style={styles.recentTaskItem}><div style={styles.recentTaskInfo}><span style={styles.recentTaskName}>{task.name}</span><span style={{...styles.status, ...styles[task.status]}}>{task.status.replace(/_/g, ' ')}</span></div><button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary, padding: '5px 10px', fontSize: '12px'}} onClick={() => onStartLabeling(task)}>View</button></div>))}</div>);
+}
 function LabelingWorkspace({ task, onBack, buttonProps }) {
-    const [images, setImages] = useState([]);
-    const [labels, setLabels] = useState([]);
-    const [selectedImage, setSelectedImage] = useState(null);
-    const [annotations, setAnnotations] = useState({});
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState(null);
-
+    const [images, setImages] = useState([]); const [labels, setLabels] = useState([]); const [selectedImage, setSelectedImage] = useState(null); const [annotations, setAnnotations] = useState({}); const [isLoading, setIsLoading] = useState(true); const [error, setError] = useState(null);
     const fetchData = useCallback(async () => {
         try {
-            const [imagesRes, labelsRes, annotationsRes] = await Promise.all([
-                fetch(`${API_URL}/api/tasks/${task.id}/images`),
-                fetch(`${API_URL}/api/labels`),
-                fetch(`${API_URL}/api/tasks/${task.id}/annotations`)
-            ]);
+            const [imagesRes, labelsRes, annotationsRes] = await Promise.all([fetch(`${API_URL}/api/tasks/${task.id}/images`), fetch(`${API_URL}/api/labels`), fetch(`${API_URL}/api/tasks/${task.id}/annotations`)]);
             if (!imagesRes.ok || !labelsRes.ok || !annotationsRes.ok) throw new Error('Failed to fetch workspace data.');
-            
             const [imagesData, labelsData, annotationsData] = await Promise.all([imagesRes.json(), labelsRes.json(), annotationsRes.json()]);
-            
             const imagesWithUrls = imagesData.map(img => ({ ...img, url: `${API_URL}/api/images/${img.id}` }));
             setImages(imagesWithUrls);
-
-            if (imagesWithUrls.length > 0) {
-                const currentSelectedExists = selectedImage && imagesWithUrls.some(i => i.id === selectedImage.id);
-                if (!currentSelectedExists) {
-                    setSelectedImage(imagesWithUrls[0]);
-                }
-            } else {
-                setSelectedImage(null);
-            }
-            
+            if (imagesWithUrls.length > 0) { if (!selectedImage || !imagesWithUrls.some(i => i.id === selectedImage.id)) setSelectedImage(imagesWithUrls[0]); } else { setSelectedImage(null); }
             setLabels(labelsData);
-
-            setAnnotations(annotationsData.reduce((acc, ann) => {
-                const imageId = ann.image_id;
-                if (!acc[imageId]) acc[imageId] = [];
-                acc[imageId].push(ann);
-                return acc;
-            }, {}));
+            setAnnotations(annotationsData.reduce((acc, ann) => { if (!acc[ann.image_id]) acc[ann.image_id] = []; acc[ann.image_id].push(ann); return acc; }, {}));
         } catch (err) { setError(err.message); } finally { setIsLoading(false); }
-    }, [task.id]);
-
-    useEffect(() => {
-        setIsLoading(true);
-        fetchData();
-    }, [fetchData]);
-
-    const handleAnnotationUpdate = (imageId, updatedAnnotations) => {
-        setAnnotations(prev => ({ ...prev, [imageId]: updatedAnnotations }));
-        // Also refetch all data to get latest task statuses from the backend
-        fetchData(); 
-    };
-
+    }, [task.id, selectedImage]);
+    useEffect(() => { setIsLoading(true); fetchData(); }, [fetchData]);
+    const handleAnnotationUpdate = (imageId, updatedAnnotations) => { setAnnotations(prev => ({ ...prev, [imageId]: updatedAnnotations })); fetchData(); };
     if (isLoading) return <div style={styles.loadingText}>Loading workspace...</div>;
     if (error) return <div style={styles.errorText}>Error: {error}</div>;
-
-    return (
-        <div style={styles.workspaceContainer}>
-            <button onClick={onBack} {...buttonProps} className="button secondary" style={{...styles.button, ...styles.backButton}}>&larr; Back to Tasks</button>
-            <div style={styles.workspaceLayout}>
-                <ImageListPanel images={images} selectedImageId={selectedImage?.id} onSelectImage={setSelectedImage} annotations={annotations} />
-                <div style={styles.mainPanel}>
-                    {selectedImage ? (
-                        <LabelingCanvas
-                            key={selectedImage.id}
-                            image={selectedImage}
-                            labels={labels}
-                            existingAnnotations={annotations[selectedImage.id] || []}
-                            onAnnotationUpdate={handleAnnotationUpdate}
-                            buttonProps={buttonProps}
-                        />
-                    ) : (
-                        <div style={styles.canvasContainer}>{images.length > 0 ? 'Select an image to start labeling' : 'This task has no images.'}</div>
-                    )}
-                </div>
-                 <LabelManager labels={labels} onLabelsUpdate={fetchData} buttonProps={buttonProps} />
-            </div>
-        </div>
-    );
+    return (<div style={styles.workspaceContainer}><button onClick={onBack} {...buttonProps} className="button secondary" style={{...styles.button, ...styles.backButton}}>&larr; Back to Tasks</button><div style={styles.workspaceLayout}><ImageListPanel images={images} selectedImageId={selectedImage?.id} onSelectImage={setSelectedImage} annotations={annotations} /><div style={styles.mainPanel}>{selectedImage ? (<LabelingCanvas key={selectedImage.id} image={selectedImage} labels={labels} existingAnnotations={annotations[selectedImage.id] || []} onAnnotationUpdate={handleAnnotationUpdate} buttonProps={buttonProps} />) : (<div style={styles.canvasContainer}>{images.length > 0 ? 'Select an image to start' : 'This task has no images.'}</div>)}</div><LabelManager labels={labels} onLabelsUpdate={fetchData} buttonProps={buttonProps} /></div></div>);
 }
-
-// --- COMPONENTS ---
-
 function UploadTask({ onTaskUploaded, buttonProps }) {
-    const [file, setFile] = useState(null);
-    const [isUploading, setIsUploading] = useState(false);
-    const fileInputRef = useRef(null);
-
-    const handleFileChange = (e) => {
-        if (e.target.files) setFile(e.target.files[0]);
-    };
-
+    const [file, setFile] = useState(null); const [isUploading, setIsUploading] = useState(false); const fileInputRef = useRef(null);
     const handleSubmit = async (e) => {
-        e.preventDefault();
-        if (!file) { alert("Please select a ZIP file."); return; }
-        setIsUploading(true);
-        const formData = new FormData();
-        formData.append("file", file);
-        try {
-            const response = await fetch(`${API_URL}/api/tasks/upload`, { method: 'POST', body: formData });
-            if (!response.ok) throw new Error((await response.json()).detail || 'Upload failed');
-            onTaskUploaded();
-            setFile(null);
-            fileInputRef.current.value = '';
-        } catch (err) { alert(`Error: ${err.message}`); } finally { setIsUploading(false); }
+        e.preventDefault(); if (!file) { alert("Please select a ZIP file."); return; }
+        setIsUploading(true); const formData = new FormData(); formData.append("file", file);
+        try { const response = await fetch(`${API_URL}/api/tasks/upload`, { method: 'POST', body: formData }); if (!response.ok) throw new Error((await response.json()).detail || 'Upload failed'); onTaskUploaded(); setFile(null); fileInputRef.current.value = ''; } catch (err) { alert(`Error: ${err.message}`); } finally { setIsUploading(false); }
     };
-
-    return (
-        <form onSubmit={handleSubmit} style={styles.uploadForm}>
-            <input type="file" accept=".zip" onChange={handleFileChange} disabled={isUploading} ref={fileInputRef} style={{ display: 'none' }} id="file-upload"/>
-            <button type="button" {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary, flexShrink: 0}} onClick={() => fileInputRef.current.click()} disabled={isUploading}>
-                Choose File
-            </button>
-            {file && <span style={styles.fileName}>{file.name}</span>}
-            <button type="submit" disabled={isUploading || !file} {...buttonProps} className="button primary" style={{...styles.button, marginLeft: 'auto'}}>
-                {isUploading ? "Uploading..." : "Upload New Task"}
-            </button>
-        </form>
-    );
+    return (<form onSubmit={handleSubmit} style={styles.uploadForm}><input type="file" accept=".zip" onChange={(e) => setFile(e.target.files[0])} disabled={isUploading} ref={fileInputRef} style={{ display: 'none' }} /><button type="button" {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary, flexShrink: 0}} onClick={() => fileInputRef.current.click()} disabled={isUploading}>Choose File</button>{file && <span style={styles.fileName}>{file.name}</span>}<button type="submit" disabled={isUploading || !file} {...buttonProps} className="button primary" style={{...styles.button, marginLeft: 'auto'}}>{isUploading ? "Uploading..." : "Upload Task"}</button></form>);
 }
-
-function ImageListPanel({ images, selectedImageId, onSelectImage, annotations }) {
-    return (
-        <div style={styles.imageListPanel}>
-            <h4 style={styles.panelTitle}>Images ({images.length})</h4>
-            <div style={styles.imageList}>
-                {images.map(img => {
-                    const isLabeled = (annotations[img.id] && annotations[img.id].length > 0) || img.status === 'labeled';
-                    return (
-                        <div key={img.id} style={{...styles.imageListItem, ...(img.id === selectedImageId ? styles.selectedImageListItem : {})}} onClick={() => onSelectImage(img)}>
-                            <span>{img.original_filename}</span>
-                            {isLabeled && <span style={styles.checkMark}>✔</span>}
-                        </div>
-                    );
-                })}
-            </div>
-        </div>
-    );
-}
-
-function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate, buttonProps }) {
-    const canvasRef = useRef(null);
-    const [isDrawing, setIsDrawing] = useState(false);
-    const [newBox, setNewBox] = useState(null);
-    const [startPoint, setStartPoint] = useState({ x: 0, y: 0 });
-    const [showLabelSelector, setShowLabelSelector] = useState(false);
-    const [hoveredAnnId, setHoveredAnnId] = useState(null);
-
-    const getCanvasPoint = (e) => {
-        const canvas = canvasRef.current; if (!canvas) return { x: 0, y: 0 };
-        const rect = canvas.getBoundingClientRect();
-        const clientX = e.clientX ?? e.touches?.[0]?.clientX;
-        const clientY = e.clientY ?? e.touches?.[0]?.clientY;
-        if (clientX === undefined || clientY === undefined) return null;
-        return { x: (clientX - rect.left) * (canvas.width / rect.width), y: (clientY - rect.top) * (canvas.height / rect.height) };
-    };
-    
+function ImageListPanel({ images, selectedImageId, onSelectImage, annotations }) { return (<div style={styles.imageListPanel}><h4 style={styles.panelTitle}>Images ({images.length})</h4><div style={styles.imageList}>{images.map(img => { const isLabeled = (annotations[img.id]?.length > 0) || img.status === 'labeled'; return (<div key={img.id} style={{...styles.imageListItem, ...(img.id === selectedImageId ? styles.selectedImageListItem : {})}} onClick={() => onSelectImage(img)}><span>{img.original_filename}</span>{isLabeled && <span style={styles.checkMark}>✔</span>}</div>); })}</div></div>); }
+function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate }) {
+    const canvasRef = useRef(null); const [isDrawing, setIsDrawing] = useState(false); const [newBox, setNewBox] = useState(null); const [startPoint, setStartPoint] = useState({ x: 0, y: 0 }); const [showLabelSelector, setShowLabelSelector] = useState(false); const [hoveredAnnId, setHoveredAnnId] = useState(null);
+    const getCanvasPoint = (e) => { const canvas = canvasRef.current; if (!canvas) return null; const rect = canvas.getBoundingClientRect(); const clientX = e.clientX ?? e.touches?.[0]?.clientX; const clientY = e.clientY ?? e.touches?.[0]?.clientY; if (clientX === undefined) return null; return { x: (clientX - rect.left) * (canvas.width / rect.width), y: (clientY - rect.top) * (canvas.height / rect.height) }; };
     const isPointInBox = (point, box) => (point.x >= box.x && point.x <= box.x + box.width && point.y >= box.y && point.y <= box.y + box.height);
-
-    const draw = useCallback(() => {
-        const canvas = canvasRef.current; if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        const img = new Image();
-        img.crossOrigin = "Anonymous";
-        img.src = image.url;
-        img.onload = () => {
-            canvas.width = img.naturalWidth;
-            canvas.height = img.naturalHeight;
-            ctx.drawImage(img, 0, 0);
-            const labelMap = new Map(labels.map(l => [l.id, l]));
-            existingAnnotations.forEach(ann => {
-                const isHovered = ann.id === hoveredAnnId;
-                const label = labelMap.get(ann.label_id);
-                ctx.lineWidth = isHovered ? 5 : 3;
-                ctx.strokeStyle = isHovered ? '#ff4757' : '#2ed573';
-                const { x, y, width, height } = ann.bounding_box;
-                ctx.strokeRect(x, y, width, height);
-
-                if (label) {
-                    const labelText = label.name;
-                    ctx.font = 'bold 16px Inter, sans-serif';
-                    const textMetrics = ctx.measureText(labelText);
-                    const textWidth = textMetrics.width;
-                    const textHeight = 16;
-                    ctx.fillStyle = ctx.strokeStyle;
-                    ctx.fillRect(x, y - textHeight - 4, textWidth + 12, textHeight + 4);
-                    ctx.fillStyle = 'white';
-                    ctx.fillText(labelText, x + 6, y - 4);
-                }
-
-                if(isHovered) {
-                    const deleteIconSize = 24;
-                    ctx.fillStyle = '#ff4757';
-                    ctx.fillRect(x + width - deleteIconSize, y, deleteIconSize, deleteIconSize);
-                    ctx.strokeStyle = 'white';
-                    ctx.lineWidth = 2;
-                    ctx.font = 'bold 16px Inter';
-                    ctx.strokeText('X', x + width - 17, y + 17);
-                }
-            });
-            if (newBox) {
-                ctx.strokeStyle = '#00f6d2'; ctx.lineWidth = 2; ctx.setLineDash([6, 3]);
-                ctx.strokeRect(newBox.x, newBox.y, newBox.width, newBox.height);
-                ctx.setLineDash([]);
-            }
-        };
-        img.onerror = () => { ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.fillText('Could not load image.', canvas.width / 2, canvas.height / 2); };
-    }, [image.url, existingAnnotations, newBox, hoveredAnnId, labels]);
-
+    const draw = useCallback(() => { const canvas = canvasRef.current; if (!canvas) return; const ctx = canvas.getContext('2d'); const img = new Image(); img.crossOrigin = "Anonymous"; img.src = image.url; img.onload = () => { canvas.width = img.naturalWidth; canvas.height = img.naturalHeight; ctx.drawImage(img, 0, 0); const labelMap = new Map(labels.map(l => [l.id, l])); existingAnnotations.forEach(ann => { const isHovered = ann.id === hoveredAnnId; const label = labelMap.get(ann.label_id); ctx.lineWidth = isHovered ? 5 : 3; ctx.strokeStyle = isHovered ? '#ff4757' : '#2ed573'; const { x, y, width, height } = ann.bounding_box; ctx.strokeRect(x, y, width, height); if (label) { const txt = label.name; ctx.font = 'bold 16px Inter, sans-serif'; const m = ctx.measureText(txt); ctx.fillStyle = ctx.strokeStyle; ctx.fillRect(x, y - 20, m.width + 12, 20); ctx.fillStyle = 'white'; ctx.fillText(txt, x + 6, y - 5); } if(isHovered) { ctx.fillStyle = '#ff4757'; ctx.fillRect(x + width - 24, y, 24, 24); ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.font = 'bold 16px Inter'; ctx.strokeText('×', x + width - 17, y + 17); } }); if (newBox) { ctx.strokeStyle = '#00f6d2'; ctx.lineWidth = 2; ctx.setLineDash([6, 3]); ctx.strokeRect(newBox.x, newBox.y, newBox.width, newBox.height); ctx.setLineDash([]); } }; img.onerror = () => { ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.fillText('Could not load image.', canvas.width / 2, canvas.height / 2); }; }, [image.url, existingAnnotations, newBox, hoveredAnnId, labels]);
     useEffect(() => { draw(); }, [draw]);
-
-    const handleAnnotationDelete = async (annotationId) => {
-        if (!window.confirm("Are you sure you want to delete this annotation?")) return;
-        try {
-            const response = await fetch(`${API_URL}/api/annotations/${annotationId}`, { method: 'DELETE' });
-            if (!response.ok) throw new Error((await response.json()).detail || 'Failed to delete annotation');
-            const updated = existingAnnotations.filter(a => a.id !== annotationId);
-            onAnnotationUpdate(image.id, updated);
-        } catch(err) { alert(`Error: ${err.message}`); }
-    };
-    
-    const handleMouseDown = (e) => {
-        if (showLabelSelector) return;
-        e.preventDefault();
-        const point = getCanvasPoint(e);
-        if (hoveredAnnId) {
-            const ann = existingAnnotations.find(a => a.id === hoveredAnnId);
-            const {x, y, width} = ann.bounding_box;
-            const deleteButton = { x: x + width - 24, y: y, width: 24, height: 24 };
-            if (isPointInBox(point, deleteButton)) {
-                handleAnnotationDelete(hoveredAnnId);
-                return;
-            }
-        }
-        setIsDrawing(true);
-        setStartPoint(point);
-        setNewBox(null);
-    };
-
-    const handleMouseMove = (e) => {
-        e.preventDefault();
-        const currentPoint = getCanvasPoint(e);
-        if (!currentPoint) return;
-        if (isDrawing) {
-            const box = { x: Math.min(startPoint.x, currentPoint.x), y: Math.min(startPoint.y, currentPoint.y), width: Math.abs(startPoint.x - currentPoint.x), height: Math.abs(startPoint.y - currentPoint.y) };
-            setNewBox(box);
-        } else if (!showLabelSelector) {
-            const annOnTop = existingAnnotations.slice().reverse().find(a => isPointInBox(currentPoint, a.bounding_box));
-            setHoveredAnnId(annOnTop ? annOnTop.id : null);
-        }
-    };
-
-    const handleMouseUp = (e) => {
-        if (!isDrawing) return;
-        e.preventDefault();
-        setIsDrawing(false);
-        if (newBox && newBox.width > 10 && newBox.height > 10) setShowLabelSelector(true);
-        else setNewBox(null);
-    };
-    
-    const handleSaveAnnotation = async (labelData) => {
-        if (!newBox) return;
-        try {
-            const response = await fetch(`${API_URL}/api/images/${image.id}/annotations`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ label_id: labelData.id, bounding_box: newBox }),
-            });
-            if (!response.ok) throw new Error((await response.json()).detail || 'Failed to save annotation');
-            const savedAnnotation = await response.json();
-            onAnnotationUpdate(image.id, [...existingAnnotations, savedAnnotation]);
-        } catch (err) { alert(`Error: ${err.message}`); } finally { resetDrawing(); }
-    };
-    
-    const resetDrawing = () => { setShowLabelSelector(false); setNewBox(null); setIsDrawing(false); };
-
-    return (
-        <div style={styles.canvasContainer}>
-            <canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => {setHoveredAnnId(null); setIsDrawing(false);}} style={styles.canvas} />
-            {showLabelSelector && ( <LabelSelector labels={labels} onSave={handleSaveAnnotation} onCancel={resetDrawing} buttonProps={buttonProps} /> )}
-        </div>
-    );
+    const handleAnnotationDelete = async (annId) => { if (!window.confirm("Delete this annotation?")) return; try { const res = await fetch(`${API_URL}/api/annotations/${annId}`, { method: 'DELETE' }); if (!res.ok) throw new Error((await res.json()).detail || 'Failed to delete'); onAnnotationUpdate(image.id, existingAnnotations.filter(a => a.id !== annId)); } catch(err) { alert(`Error: ${err.message}`); } };
+    const handleMouseDown = (e) => { if (showLabelSelector) return; e.preventDefault(); const p = getCanvasPoint(e); if (!p) return; if (hoveredAnnId) { const ann = existingAnnotations.find(a => a.id === hoveredAnnId); const {x, y, width} = ann.bounding_box; if (isPointInBox(p, { x: x + width - 24, y, width: 24, height: 24 })) { handleAnnotationDelete(hoveredAnnId); return; } } setIsDrawing(true); setStartPoint(p); setNewBox(null); };
+    const handleMouseMove = (e) => { e.preventDefault(); const p = getCanvasPoint(e); if (!p) return; if (isDrawing) { setNewBox({ x: Math.min(startPoint.x, p.x), y: Math.min(startPoint.y, p.y), width: Math.abs(startPoint.x - p.x), height: Math.abs(startPoint.y - p.y) }); } else if (!showLabelSelector) { const ann = existingAnnotations.slice().reverse().find(a => isPointInBox(p, a.bounding_box)); setHoveredAnnId(ann ? ann.id : null); } };
+    const handleMouseUp = () => { if (!isDrawing) return; setIsDrawing(false); if (newBox && newBox.width > 10 && newBox.height > 10) setShowLabelSelector(true); else setNewBox(null); };
+    const handleSaveAnnotation = async (labelData) => { if (!newBox) return; try { const res = await fetch(`${API_URL}/api/images/${image.id}/annotations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label_id: labelData.id, bounding_box: newBox }) }); if (!res.ok) throw new Error((await res.json()).detail || 'Failed to save'); onAnnotationUpdate(image.id, [...existingAnnotations, await res.json()]); } catch (err) { alert(`Error: ${err.message}`); } finally { setShowLabelSelector(false); setNewBox(null); setIsDrawing(false); } };
+    return (<div style={styles.canvasContainer}><canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={() => {setHoveredAnnId(null); setIsDrawing(false);}} style={styles.canvas} />{showLabelSelector && ( <LabelSelector labels={labels} onSave={handleSaveAnnotation} onCancel={() => { setShowLabelSelector(false); setNewBox(null); }} /> )}</div>);
 }
-
-function LabelSelector({ labels, onSave, onCancel, buttonProps }) {
+function LabelSelector({ labels, onSave, onCancel }) {
     const [selectedLabelId, setSelectedLabelId] = useState(labels[0]?.id || '');
-    useEffect(() => { if (labels.length > 0 && !selectedLabelId) setSelectedLabelId(labels[0].id) }, [labels, selectedLabelId]);
-
-    const handleSubmit = (e) => {
-        e.preventDefault();
-        if (!selectedLabelId) { alert("Please select a label."); return; }
-        if (labels.length === 0) { alert("Please create a label first in the 'Manage Labels' panel."); return; }
-        onSave({ id: parseInt(selectedLabelId, 10) });
-    };
-
-    return (
-        <div style={styles.labelSelector}>
-            <form onSubmit={handleSubmit}>
-                <h4 style={styles.labelSelectorTitle}>Assign Label</h4>
-                {labels.length > 0 ? (
-                    <select value={selectedLabelId} onChange={(e) => setSelectedLabelId(e.target.value)} style={styles.select} autoFocus>
-                        {labels.map(label => (<option key={label.id} value={label.id}>{label.name}</option>))}
-                    </select>
-                ) : (
-                    <p style={{textAlign: 'center', margin: '0 0 1rem 0'}}>No labels available.</p>
-                )}
-                <div style={styles.labelSelectorActions}>
-                    <button type="button" onClick={onCancel} {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}}>Cancel</button>
-                    <button type="submit" {...buttonProps} className="button primary" style={styles.button} disabled={labels.length === 0}>Save</button>
-                </div>
-            </form>
-        </div>
-    );
+    useEffect(() => { if (labels.length > 0 && !selectedLabelId) setSelectedLabelId(labels[0].id); }, [labels, selectedLabelId]);
+    const handleSubmit = (e) => { e.preventDefault(); if (labels.length === 0) { alert("Create a label first."); return; } if (!selectedLabelId) { alert("Select a label."); return; } onSave({ id: parseInt(selectedLabelId, 10) }); };
+    return (<div style={styles.labelSelector}><form onSubmit={handleSubmit}><h4 style={styles.labelSelectorTitle}>Assign Label</h4>{labels.length > 0 ? (<select value={selectedLabelId} onChange={(e) => setSelectedLabelId(e.target.value)} style={styles.select} autoFocus>{labels.map(l => (<option key={l.id} value={l.id}>{l.name}</option>))}</select>) : (<p style={{textAlign:'center', margin:'0 0 1rem 0'}}>No labels available.</p>)}<div style={styles.labelSelectorActions}><button type="button" onClick={onCancel} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}}>Cancel</button><button type="submit" className="button primary" style={styles.button} disabled={labels.length === 0}>Save</button></div></form></div>);
 }
-
 function LabelManager({ labels, onLabelsUpdate, buttonProps }) {
     const [newLabelName, setNewLabelName] = useState('');
-
-    const handleCreate = async (e) => {
-        e.preventDefault();
-        if (!newLabelName.trim()) return;
-        try {
-            const response = await fetch(`${API_URL}/api/labels`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: newLabelName }),
-            });
-            if (!response.ok) throw new Error((await response.json()).detail || 'Failed to create label');
-            setNewLabelName('');
-            onLabelsUpdate();
-        } catch (err) { alert(`Error: ${err.message}`); }
-    };
-    
-    const handleDelete = async (labelId) => {
-        if (!window.confirm("Are you sure you want to delete this label? This cannot be undone.")) return;
-        try {
-            const response = await fetch(`${API_URL}/api/labels/${labelId}`, { method: 'DELETE' });
-            if (!response.ok) throw new Error((await response.json()).detail || 'Failed to delete label');
-            onLabelsUpdate();
-        } catch (err) { alert(`Error: ${err.message}`); }
-    };
-    
-    return (
-        <div style={styles.labelManager}>
-            <h4 style={styles.panelTitle}>Manage Labels</h4>
-            <div style={styles.labelList}>
-                {labels.length === 0 && <p style={{fontSize: '14px', color: '#888'}}>No labels created.</p>}
-                {labels.map(label => (
-                    <div key={label.id} style={styles.labelItem}>
-                        <span>{label.name}</span>
-                        <button onClick={() => handleDelete(label.id)} style={styles.deleteButton} title={`Delete "${label.name}"`}>&times;</button>
-                    </div>
-                ))}
-            </div>
-            <form onSubmit={handleCreate} style={styles.labelCreateForm}>
-                <input type="text" value={newLabelName} onChange={(e) => setNewLabelName(e.target.value)} placeholder="New label name..." style={styles.input} />
-                <button type="submit" {...buttonProps} className="button primary" style={{...styles.button, width: '100%'}} disabled={!newLabelName.trim()}>Add Label</button>
-            </form>
-        </div>
-    );
+    const handleCreate = async (e) => { e.preventDefault(); if (!newLabelName.trim()) return; try { const res = await fetch(`${API_URL}/api/labels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newLabelName }), }); if (!res.ok) throw new Error((await res.json()).detail || 'Failed'); setNewLabelName(''); onLabelsUpdate(); } catch (err) { alert(`Error: ${err.message}`); } };
+    const handleDelete = async (labelId) => { if (!window.confirm("Delete this label?")) return; try { const res = await fetch(`${API_URL}/api/labels/${labelId}`, { method: 'DELETE' }); if (!res.ok) throw new Error((await res.json()).detail || 'Failed'); onLabelsUpdate(); } catch (err) { alert(`Error: ${err.message}`); } };
+    return (<div style={styles.labelManager}><h4 style={styles.panelTitle}>Manage Labels</h4><div style={styles.labelList}>{labels.length === 0 ? <p style={{fontSize:'14px', color:'#888'}}>No labels created.</p> : labels.map(l => (<div key={l.id} style={styles.labelItem}><span>{l.name}</span><button onClick={() => handleDelete(l.id)} style={styles.deleteButton} title={`Delete "${l.name}"`}>&times;</button></div>))}</div><form onSubmit={handleCreate} style={styles.labelCreateForm}><input type="text" value={newLabelName} onChange={(e) => setNewLabelName(e.target.value)} placeholder="New label name..." style={styles.input} /><button type="submit" {...buttonProps} className="button primary" style={{...styles.button, width: '100%'}} disabled={!newLabelName.trim()}>Add Label</button></form></div>);
 }
 
 // --- STYLES ---
 const styles = {
     app: { fontFamily: 'Inter, "Segoe UI", sans-serif', color: '#e0e0e0', backgroundColor: '#1a1d21', minHeight: '100vh' },
-    header: { backgroundColor: '#23272c', color: 'white', padding: '1rem 2rem', textAlign: 'center', borderBottom: '1px solid #3a3f46' },
+    header: { backgroundColor: '#23272c', color: 'white', padding: '0 2rem', borderBottom: '1px solid #3a3f46' },
+    headerContent: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '64px', maxWidth: '1400px', margin: '0 auto'},
     headerH1: { cursor: 'pointer', margin: 0, fontSize: '1.5rem', fontWeight: 600 },
+    nav: { display: 'flex', gap: '0.5rem' },
+    navLink: { background: 'none', border: 'none', color: '#a0a0a0', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '1rem', transition: 'all 0.2s' },
+    activeNavLink: { backgroundColor: '#3a3f46', color: 'white', fontWeight: '500' },
     main: { padding: '2rem' },
     loadingText: { textAlign: 'center', padding: '3rem', fontSize: '1.2rem', color: '#a0a0a0' },
     errorText: { textAlign: 'center', padding: '3rem', fontSize: '1.2rem', color: '#e74c3c' },
     button: { backgroundColor: '#00a896', color: 'white', border: 'none', borderRadius: '6px', padding: '10px 18px', fontSize: '14px', fontWeight: 600, cursor: 'pointer' },
     buttonSecondary: { backgroundColor: '#4a4f56' },
     pageTitle: { fontSize: '2rem', fontWeight: 700, marginBottom: '1.5rem', color: 'white', borderBottom: '2px solid #00a896', paddingBottom: '0.5rem', display: 'inline-block' },
-    taskListContainer: { maxWidth: '900px', margin: '0 auto' },
+    dashboardContainer: { animation: 'fadeIn 0.5s' },
+    statGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.5rem', marginBottom: '2rem' },
+    statCard: { backgroundColor: '#23272c', padding: '1.5rem', borderRadius: '12px', border: '1px solid #3a3f46' },
+    statCardTitle: { margin: '0 0 0.5rem 0', color: '#a0a0a0', fontSize: '1rem', fontWeight: 500 },
+    statCardValue: { margin: 0, color: 'white', fontSize: '2.5rem', fontWeight: 700 },
+    chartsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1.5rem' },
+    chartCard: { backgroundColor: '#23272c', padding: '1.5rem', borderRadius: '12px', border: '1px solid #3a3f46', display: 'flex', flexDirection: 'column' },
+    chartCardTitle: { margin: '0 0 1.5rem 0', color: 'white', fontSize: '1.2rem', fontWeight: 600 },
+    chartCardContent: { flex: 1 },
+    donutChartContainer: { display: 'flex', alignItems: 'center', gap: '2rem' },
+    donut: { width: '140px', height: '140px', borderRadius: '50%', },
+    legend: { display: 'flex', flexDirection: 'column', gap: '0.75rem' },
+    legendItem: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '14px' },
+    legendColorBox: { width: '14px', height: '14px', borderRadius: '3px' },
+    legendText: { textTransform: 'capitalize' },
+    barChartContainer: { display: 'flex', flexDirection: 'column', gap: '1rem' },
+    barRow: { display: 'flex', alignItems: 'center', gap: '1rem' },
+    barLabel: { width: '100px', textAlign: 'right', fontSize: '14px', color: '#a0a0a0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+    barWrapper: { flex: 1, backgroundColor: '#3a3f46', borderRadius: '4px', height: '24px' },
+    bar: { height: '100%', backgroundColor: '#00a896', borderRadius: '4px', transition: 'width 0.5s' },
+    barValue: { fontSize: '14px', fontWeight: '600' },
+    recentTasksContainer: { display: 'flex', flexDirection: 'column', gap: '0.75rem' },
+    recentTaskItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 0', borderBottom: '1px solid #3a3f46' },
+    recentTaskInfo: { display: 'flex', alignItems: 'center', gap: '1rem', overflow: 'hidden' },
+    recentTaskName: { fontWeight: 500, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden'},
+    taskListContainer: { maxWidth: '900px', margin: '0 auto', animation: 'fadeIn 0.5s' },
     uploadForm: { marginBottom: '2rem', padding: '1.5rem', border: '1px solid #3a3f46', borderRadius: '12px', backgroundColor: '#23272c', display: 'flex', gap: '1rem', alignItems: 'center' },
     fileName: { color: '#e0e0e0', fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 },
     taskList: { display: 'flex', flexDirection: 'column', gap: '1rem' },
@@ -514,8 +404,8 @@ const styles = {
     taskInfo: { display: 'flex', alignItems: 'center', gap: '1rem' },
     status: { padding: '6px 12px', borderRadius: '16px', color: 'white', fontSize: '12px', fontWeight: 600, textTransform: 'capitalize' },
     processing: { backgroundColor: '#f39c12' }, ready: { backgroundColor: '#3498db' }, in_progress: { backgroundColor: '#8e44ad' }, completed: { backgroundColor: '#27ae60' }, failed: { backgroundColor: '#c0392b' },
-    taskActions: { display: 'flex', gap: '0.75rem' },
-    workspaceContainer: { position: 'relative' },
+    taskActions: { display: 'flex', flexWrap: 'wrap', gap: '0.75rem' },
+    workspaceContainer: { position: 'relative', animation: 'fadeIn 0.5s' },
     backButton: { marginBottom: '1.5rem', border: '1px solid #4a4f56', backgroundColor: 'transparent' },
     workspaceLayout: { display: 'flex', gap: '1.5rem', border: '1px solid #3a3f46', borderRadius: '12px', padding: '1.5rem', minHeight: '75vh', backgroundColor: '#23272c' },
     imageListPanel: { width: '280px', flexShrink: 0, display: 'flex', flexDirection: 'column' },
@@ -535,6 +425,16 @@ const styles = {
     labelManager: { width: '250px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '1rem', borderLeft: '1px solid #3a3f46', paddingLeft: '1.5rem' },
     labelList: { flex: 1, overflowY: 'auto' },
     labelItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', borderRadius: '6px', backgroundColor: '#3a3f46', marginBottom: '0.5rem' },
-    deleteButton: { backgroundColor: 'transparent', color: '#aaa', border: 'none', borderRadius: '4px', cursor: 'pointer', width: '24px', height: '24px', fontWeight: 'bold', fontSize: '16px', lineHeight: '24px', transition: 'background-color 0.2s, color 0.2s' },
-    labelCreateForm: { display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid #3a3f46' }
+    deleteButton: { backgroundColor: 'transparent', color: '#aaa', border: 'none', borderRadius: '50%', cursor: 'pointer', width: '24px', height: '24px', fontWeight: 'bold', fontSize: '16px', lineHeight: '24px', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center'},
+    labelCreateForm: { display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid #3a3f46' },
+    modalBackdrop: { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0, 0, 0, 0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000, animation: 'fadeIn 0.3s' },
+    modalContent: { backgroundColor: '#2c3035', padding: '2rem', borderRadius: '12px', width: '90%', maxWidth: '500px', border: '1px solid #4a4f56' },
+    modalTitle: { margin: '0 0 1.5rem 0', color: 'white', fontSize: '1.5rem', fontWeight: 600 },
+    modalSection: { marginBottom: '1.5rem' },
+    modalLabel: { display: 'block', marginBottom: '0.75rem', color: '#a0a0a0', fontWeight: 500 },
+    radioGroup: { display: 'flex', flexDirection: 'column', gap: '0.5rem', color: '#e0e0e0' },
+    checkboxGroup: { maxHeight: '200px', overflowY: 'auto', border: '1px solid #4a4f56', borderRadius: '6px', padding: '1rem' },
+    checkboxLabel: { display: 'block', padding: '0.5rem 0', cursor: 'pointer' },
+    modalActions: { display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '2rem' },
+    modalError: { color: '#ff4757', textAlign: 'center' }
 };
