@@ -207,7 +207,6 @@ function TaskListPage({ onStartLabeling, buttonProps }) {
     }, []);
     useEffect(() => { fetchTasks(); const interval = setInterval(fetchTasks, 5000); return () => clearInterval(interval); }, [fetchTasks]);
     
-    // --- MODIFIED CODE START (handleDelete function added) ---
     const handleDelete = async (taskId) => {
         if (!window.confirm("Are you sure you want to delete this task and all its data? This cannot be undone.")) {
             return;
@@ -222,9 +221,7 @@ function TaskListPage({ onStartLabeling, buttonProps }) {
             alert(`Could not delete task: ${error.message}`);
         }
     };
-    // --- MODIFIED CODE END ---
 
-    // --- MODIFIED CODE START (handleExport updated for different formats) ---
     const handleExport = async (taskId, format) => {
         const endpoint = format === 'yolo'
             ? `${API_URL}/api/tasks/${taskId}/export-yolo`
@@ -256,21 +253,53 @@ function TaskListPage({ onStartLabeling, buttonProps }) {
             alert(`Could not export: ${error.message}`);
         }
     };
-    // --- MODIFIED CODE END ---
 
     if (isLoading) return <div style={styles.loadingText}>Loading tasks...</div>;
     if (error) return <div style={styles.errorText}>Error: {error}</div>;
-    return (<>{processingTask && <ProcessTaskModal task={processingTask} onClose={() => setProcessingTask(null)} buttonProps={buttonProps} />}<div style={styles.taskListContainer}><h2 style={styles.pageTitle}>Tasks</h2><UploadTask onTaskUploaded={fetchTasks} buttonProps={buttonProps} /><div style={styles.taskList}>{tasks.map(task => (<div key={task.id} style={styles.taskItem}><div style={styles.taskInfo}><strong>{task.name}</strong><span style={{...styles.status, ...styles[task.status]}}>{task.status.replace(/_/g, ' ')}</span></div>
-    {/* --- MODIFIED CODE START (Buttons updated) --- */}
-    <div style={styles.taskActions}>
-        <button {...buttonProps} className="button primary" style={styles.button} onClick={() => onStartLabeling(task)}>{task.status === 'completed' ? 'View' : 'Label'}</button>
-        <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => setProcessingTask(task)}>Process & Download</button>
-        <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => handleExport(task.id, 'excel')}>Export to Excel</button>
-        <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => handleExport(task.id, 'yolo')}>Export to YOLO</button>
-        <button {...buttonProps} className="button secondary" style={{...styles.button, backgroundColor: '#c0392b'}} onClick={() => handleDelete(task.id)}>Delete</button>
+    return (<>{processingTask && <ProcessTaskModal task={processingTask} onClose={() => setProcessingTask(null)} buttonProps={buttonProps} />}<div style={styles.taskListContainer}><h2 style={styles.pageTitle}>Tasks</h2><UploadTask onTaskUploaded={fetchTasks} buttonProps={buttonProps} /><div style={styles.taskList}>
+        {tasks.map(task => (
+    <div key={task.id} style={styles.taskItem}>
+        <div style={styles.taskInfo}>
+            <strong>{task.name}</strong>
+            <span style={{...styles.status, ...styles[task.status]}}>
+                {task.status.replace(/_/g, ' ')}
+            </span>
+        </div>
+
+        {(task.status === 'in_progress' || task.status === 'completed') && task.total_images > 0 && (
+            <div style={styles.taskDetails}>
+                <div style={styles.progressBarContainer}>
+                    <div style={{
+                        ...styles.progressBar,
+                        width: `${(task.labeled_images / task.total_images) * 100}%`
+                    }}></div>
+                </div>
+                <div style={styles.detailsText}>
+                    <span>{task.labeled_images} / {task.total_images} images</span>
+                    <div style={styles.labelSummary}>
+                        {task.annotation_summary.length > 0 ? (
+                            task.annotation_summary.map(summary => (
+                                <span key={summary.label_name} style={styles.labelChip}>
+                                    {summary.label_name}: {summary.count}
+                                </span>
+                            ))
+                        ) : (
+                            <span>No annotations yet.</span>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        <div style={styles.taskActions}>
+            <button {...buttonProps} className="button primary" style={styles.button} onClick={() => onStartLabeling(task)}>{task.status === 'completed' ? 'View' : 'Label'}</button>
+            <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => setProcessingTask(task)}>Process & Download</button>
+            <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => handleExport(task.id, 'excel')}>Export to Excel</button>
+            <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => handleExport(task.id, 'yolo')}>Export to YOLO</button>
+            <button {...buttonProps} className="button secondary" style={{...styles.button, backgroundColor: '#c0392b'}} onClick={() => handleDelete(task.id)}>Delete</button>
+        </div>
     </div>
-    {/* --- MODIFIED CODE END --- */}
-    </div>))}</div></div></>);
+))}</div></div></>);
 }
 
 function StatCard({ title, value }) { return ( <div style={styles.statCard}><h3 style={styles.statCardTitle}>{title}</h3><p style={styles.statCardValue}>{value}</p></div>); }
@@ -289,7 +318,6 @@ function LabelingWorkspace({ task, onBack, buttonProps }) {
 
     const fetchData = useCallback(async () => {
         try {
-            // No longer fetching image files separately, image data is part of the 'images' response
             const [imgRes, lblRes, annRes] = await Promise.all([
                 fetch(`${API_URL}/api/tasks/${task.id}/images`),
                 fetch(`${API_URL}/api/labels`),
@@ -306,10 +334,9 @@ function LabelingWorkspace({ task, onBack, buttonProps }) {
                 annRes.json()
             ]);
 
-            // Construct image objects with Base64 data directly
             const imgs = imgData.map(img => ({
                 ...img,
-                url: `data:image/png;base64,${img.data}` // Prefix Base64 data with data URL scheme
+                url: `data:image/png;base64,${img.data}`
             }));
             setImages(imgs);
 
@@ -341,7 +368,23 @@ function LabelingWorkspace({ task, onBack, buttonProps }) {
 
     const handleAnnUpdate = (imgId, anns) => {
         setAnnotations(p => ({ ...p, [imgId]: anns }));
-        fetchData(); // Re-fetch to ensure task/image statuses are updated
+        fetchData();
+    };
+
+    const handleNextImage = () => {
+        if (!selectedImage) return;
+        const currentIndex = images.findIndex(img => img.id === selectedImage.id);
+        if (currentIndex < images.length - 1) {
+            setSelectedImage(images[currentIndex + 1]);
+        }
+    };
+
+    const handlePrevImage = () => {
+        if (!selectedImage) return;
+        const currentIndex = images.findIndex(img => img.id === selectedImage.id);
+        if (currentIndex > 0) {
+            setSelectedImage(images[currentIndex - 1]);
+        }
     };
 
     if (isLoading) return <div style={styles.loadingText}>Loading...</div>;
@@ -354,13 +397,35 @@ function LabelingWorkspace({ task, onBack, buttonProps }) {
                 <ImageListPanel images={images} selectedImageId={selectedImage?.id} onSelectImage={setSelectedImage} annotations={annotations} />
                 <div style={styles.mainPanel}>
                     {selectedImage ? (
-                        <LabelingCanvas
-                            key={selectedImage.id} // Key ensures canvas re-renders when image changes
-                            image={selectedImage}
-                            labels={labels}
-                            existingAnnotations={annotations[selectedImage.id] || []}
-                            onAnnotationUpdate={handleAnnUpdate}
-                        />
+                        <div style={styles.canvasArea}>
+                            <LabelingCanvas
+                                key={selectedImage.id}
+                                image={selectedImage}
+                                labels={labels}
+                                existingAnnotations={annotations[selectedImage.id] || []}
+                                onAnnotationUpdate={handleAnnUpdate}
+                            />
+                            <div style={styles.navigationControls}>
+                                <button
+                                    {...buttonProps}
+                                    className="button secondary"
+                                    style={{...styles.button, ...styles.buttonSecondary}}
+                                    onClick={handlePrevImage}
+                                    disabled={images.findIndex(img => img.id === selectedImage.id) === 0}
+                                >
+                                    &larr; Previous Image
+                                </button>
+                                <button
+                                    {...buttonProps}
+                                    className="button secondary"
+                                    style={{...styles.button, ...styles.buttonSecondary}}
+                                    onClick={handleNextImage}
+                                    disabled={images.findIndex(img => img.id === selectedImage.id) === images.length - 1}
+                                >
+                                    Next Image &rarr;
+                                </button>
+                            </div>
+                        </div>
                     ) : (
                         <div style={styles.canvasContainer}>
                             {images.length > 0 ? 'Select an image' : 'No images.'}
@@ -384,7 +449,7 @@ function UploadTask({ onTaskUploaded, buttonProps }) {
 
         setIsUploading(true);
         const formData = new FormData();
-        formData.append("file", file); // FastAPI expects 'file' field for UploadFile
+        formData.append("file", file);
 
         try {
             const res = await fetch(`${API_URL}/api/tasks/upload`, {
@@ -396,9 +461,9 @@ function UploadTask({ onTaskUploaded, buttonProps }) {
                 const errorData = await res.json();
                 throw new Error(errorData.detail || 'Upload failed');
             }
-            onTaskUploaded(); // Refresh task list
+            onTaskUploaded();
             setFile(null);
-            fileInputRef.current.value = ''; // Clear file input
+            fileInputRef.current.value = '';
         } catch (err) {
             alert(`Error: ${err.message}`);
         } finally {
@@ -417,15 +482,28 @@ function UploadTask({ onTaskUploaded, buttonProps }) {
 }
 
 function ImageListPanel({ images, selectedImageId, onSelectImage, annotations }) {
+    const listContainerRef = useRef(null);
+
+    useEffect(() => {
+        const selectedItem = listContainerRef.current?.querySelector(`[data-image-id="${selectedImageId}"]`);
+        if (selectedItem) {
+            selectedItem.scrollIntoView({
+                behavior: 'smooth',
+                block: 'nearest',
+            });
+        }
+    }, [selectedImageId]);
+
     return (
         <div style={styles.imageListPanel}>
             <h4 style={styles.panelTitle}>Images ({images.length})</h4>
-            <div style={styles.imageList}>
+            <div ref={listContainerRef} style={styles.imageList}>
                 {images.map(img => {
                     const isLabeled = (annotations[img.id]?.length > 0) || img.status === 'labeled';
                     return (
                         <div
                             key={img.id}
+                            data-image-id={img.id}
                             style={{...styles.imageListItem, ...(img.id === selectedImageId ? styles.selectedImageListItem : {})}}
                             onClick={() => onSelectImage(img)}
                         >
@@ -470,15 +548,14 @@ function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         const img = new Image();
-        img.crossOrigin = "Anonymous"; // Required for cross-origin images or data URLs
-        img.src = image.url; // This now directly contains the Base64 data URL
+        img.crossOrigin = "Anonymous";
+        img.src = image.url;
 
         img.onload = () => {
-            // Set canvas dimensions to natural image dimensions
             canvas.width = img.naturalWidth;
             canvas.height = img.naturalHeight;
             
-            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear canvas before drawing
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0);
 
             const labelMap = new Map(labels.map(l => [l.id, l]));
@@ -517,9 +594,9 @@ function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate
             if (newBox) {
                 ctx.strokeStyle = '#00f6d2';
                 ctx.lineWidth = 2;
-                ctx.setLineDash([6, 3]); // Dashed line for new box
+                ctx.setLineDash([6, 3]);
                 ctx.strokeRect(newBox.x, newBox.y, newBox.width, newBox.height);
-                ctx.setLineDash([]); // Reset line dash
+                ctx.setLineDash([]);
             }
         };
 
@@ -531,7 +608,6 @@ function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate
             ctx.textBaseline = 'middle';
             ctx.fillText('Could not load image.', canvas.width / 2, canvas.height / 2);
         };
-        // If image is already loaded (e.g., from cache), call onload directly
         if (img.complete) {
             img.onload();
         }
@@ -560,7 +636,6 @@ function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate
         if (hoveredAnnId) {
             const ann = existingAnnotations.find(a => a.id === hoveredAnnId);
             const {x, y, width} = ann.bounding_box;
-            // Check if click is on the delete 'x'
             if (isPointInBox(p, { x: x + width - 24, y, width: 24, height: 24 })) {
                 handleDelete(hoveredAnnId);
                 return;
@@ -568,7 +643,7 @@ function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate
         }
         setIsDrawing(true);
         setStartPoint(p);
-        setNewBox(null); // Clear any previous new box
+        setNewBox(null);
     };
 
     const handleMouseMove = (e) => {
@@ -584,8 +659,6 @@ function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate
                 height: Math.abs(startPoint.y - p.y)
             });
         } else if (!showLabelSelector) {
-            // Determine hovered annotation for delete button
-            // Iterate from last to first to prioritize annotations drawn last (on top)
             const ann = existingAnnotations.slice().reverse().find(a => isPointInBox(p, a.bounding_box));
             setHoveredAnnId(ann ? ann.id : null);
         }
@@ -594,10 +667,10 @@ function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate
     const handleMouseUp = () => {
         if (!isDrawing) return;
         setIsDrawing(false);
-        if (newBox?.width > 10 && newBox?.height > 10) { // Require a minimum size for a valid box
+        if (newBox?.width > 10 && newBox?.height > 10) {
             setShowLabelSelector(true);
         } else {
-            setNewBox(null); // Discard small boxes
+            setNewBox(null);
         }
     };
 
@@ -629,7 +702,7 @@ function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
-                onMouseLeave={() => {setHoveredAnnId(null); setIsDrawing(false);}} // Reset hover and drawing on leave
+                onMouseLeave={() => {setHoveredAnnId(null); setIsDrawing(false);}}
                 style={styles.canvas}
             />
             {showLabelSelector && (
@@ -638,7 +711,7 @@ function LabelingCanvas({ image, labels, existingAnnotations, onAnnotationUpdate
                     onSave={handleSave}
                     onCancel={() => {
                         setShowLabelSelector(false);
-                        setNewBox(null); // Discard new box if canceled
+                        setNewBox(null);
                     }}
                 />
             )}
@@ -650,7 +723,6 @@ function LabelSelector({ labels, onSave, onCancel }) {
     const [selected, setSelected] = useState(labels[0]?.id || '');
 
     useEffect(() => {
-        // Automatically select the first label if none is selected and labels exist
         if (labels.length > 0 && !selected) {
             setSelected(labels[0].id);
         }
@@ -709,7 +781,7 @@ function LabelManager({ labels, onLabelsUpdate, buttonProps }) {
                 throw new Error(errorData.detail || 'Failed to create label');
             }
             setName('');
-            onLabelsUpdate(); // Refresh labels list
+            onLabelsUpdate();
         } catch (err) {
             alert(`Error: ${err.message}`);
         }
@@ -723,7 +795,7 @@ function LabelManager({ labels, onLabelsUpdate, buttonProps }) {
                 const errorData = await res.json();
                 throw new Error(errorData.detail || 'Failed to delete label');
             }
-            onLabelsUpdate(); // Refresh labels list
+            onLabelsUpdate();
         } catch (err) {
             alert(`Error: ${err.message}`);
         }
@@ -807,11 +879,29 @@ const styles = {
     uploadForm: { marginBottom: '2rem', padding: '1.5rem', border: '1px solid #3a3f46', borderRadius: '12px', backgroundColor: '#23272c', display: 'flex', gap: '1rem', alignItems: 'center' },
     fileName: { color: '#e0e0e0', fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 },
     taskList: { display: 'flex', flexDirection: 'column', gap: '1rem' },
-    taskItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.5rem', border: '1px solid #3a3f46', borderRadius: '12px', backgroundColor: '#23272c' },
-    taskInfo: { display: 'flex', alignItems: 'center', gap: '1rem' },
+    taskItem: { 
+        display: 'flex', 
+        flexDirection: 'column',
+        gap: '1rem',
+        padding: '1.5rem', 
+        border: '1px solid #3a3f46', 
+        borderRadius: '12px', 
+        backgroundColor: '#23272c' 
+    },
+    taskInfo: { 
+        display: 'flex', 
+        justifyContent: 'space-between',
+        alignItems: 'center', 
+        gap: '1rem' 
+    },
     status: { padding: '6px 12px', borderRadius: '16px', color: 'white', fontSize: '12px', fontWeight: 600, textTransform: 'capitalize' },
     processing: { backgroundColor: '#f39c12' }, ready: { backgroundColor: '#3498db' }, in_progress: { backgroundColor: '#8e44ad' }, completed: { backgroundColor: '#27ae60' }, failed: { backgroundColor: '#c0392b' },
-    taskActions: { display: 'flex', flexWrap: 'wrap', gap: '0.75rem' },
+    taskActions: { 
+        display: 'flex', 
+        flexWrap: 'wrap', 
+        gap: '0.75rem', 
+        justifyContent: 'flex-end'
+    },
     workspaceContainer: { position: 'relative', animation: 'fadeIn 0.5s' },
     backButton: { marginBottom: '1.5rem', border: '1px solid #4a4f56', backgroundColor: 'transparent' },
     workspaceLayout: { 
@@ -827,11 +917,10 @@ const styles = {
     mainPanel: { flex: 1, display: 'flex', minWidth: 0 },
     panelTitle: { margin: '0 0 1rem 0', paddingBottom: '0.75rem', borderBottom: '1px solid #3a3f46', color: '#a0a0a0', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px' },
     imageList: { overflowY: 'auto', flex: 1, paddingRight: '10px' },
-    imageListItem: { padding: '12px 15px', cursor: 'pointer', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', transition: 'background-color 0.2s ease', border: '1px solid transparent' },
+    imageListItem: { fontSize: '0.8rem', padding: '12px 15px', cursor: 'pointer', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', transition: 'background-color 0.2s ease', border: '1px solid transparent' },
     selectedImageListItem: { backgroundColor: 'rgba(0, 168, 150, 0.2)', color: 'white', fontWeight: 600, border: '1px solid #00a896' },
     checkMark: { color: '#27ae60', fontWeight: 'bold', fontSize: '1.2rem' },
     canvasContainer: { flex: 1, position: 'relative', display: 'flex', justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1d21', borderRadius: '8px', overflow: 'hidden' },
-    // --- MODIFIED CODE START (Canvas style updated) ---
     canvas: { 
         maxWidth: '100%', 
         maxHeight: '100%', 
@@ -839,7 +928,58 @@ const styles = {
         objectFit: 'contain', 
         borderRadius: '4px' 
     },
-    // --- MODIFIED CODE END ---
+    canvasArea: {
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '1rem',
+        minWidth: 0
+    },
+    navigationControls: {
+        display: 'flex',
+        justifyContent: 'center',
+        gap: '1rem',
+        flexShrink: 0,
+    },
+    taskDetails: {
+        paddingTop: '1rem',
+        borderTop: '1px solid #3a3f46'
+    },
+    progressBarContainer: {
+        height: '8px',
+        width: '100%',
+        backgroundColor: '#3a3f46',
+        borderRadius: '4px',
+        marginBottom: '0.75rem'
+    },
+    progressBar: {
+        height: '100%',
+        backgroundColor: '#27ae60',
+        borderRadius: '4px',
+        transition: 'width 0.3s ease-in-out'
+    },
+    detailsText: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        fontSize: '14px',
+        color: '#a0a0a0',
+        flexWrap: 'wrap',
+        gap: '0.5rem'
+    },
+    labelSummary: {
+        display: 'flex',
+        gap: '0.5rem',
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end'
+    },
+    labelChip: {
+        backgroundColor: '#4a4f56',
+        padding: '4px 8px',
+        borderRadius: '12px',
+        fontSize: '12px',
+        color: 'white'
+    },
     labelSelector: { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', backgroundColor: '#2c3035', padding: '1.5rem', border: '1px solid #4a4f56', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', zIndex: 10, width: '280px', animation: 'fadeIn 0.2s ease-out' },
     labelSelectorTitle: { margin: '0 0 1rem 0', color: 'white', fontSize: '1.1rem', fontWeight: 600 },
     labelSelectorActions: { marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' },
