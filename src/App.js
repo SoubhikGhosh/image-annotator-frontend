@@ -820,7 +820,7 @@ const styles = {
         border: '1px solid #3a3f46', 
         borderRadius: '12px', 
         padding: '1.5rem', 
-        height: '75vh',
+        height: '70vh',
         backgroundColor: '#23272c' 
     },
     imageListPanel: { width: '280px', flexShrink: 0, display: 'flex', flexDirection: 'column' },
