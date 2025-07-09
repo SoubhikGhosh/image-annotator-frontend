@@ -29,7 +29,8 @@ export default function App() {
             `}</style>
             <header style={styles.header}>
                 <div style={styles.headerContent}>
-                    <h1 onClick={() => navigateTo('dashboard')} style={styles.headerH1}>Image Labelling Tool</h1>
+                    <img src="/assets/images/logo.png" alt="Logo" style={styles.logo} onClick={() => navigateTo('dashboard')}/>
+                    <h1 onClick={() => navigateTo('dashboard')} style={styles.headerH1}></h1>
                     <nav style={styles.nav}>
                         <button onClick={() => navigateTo('dashboard')} style={{...styles.navLink, ...(page === 'dashboard' ? styles.activeNavLink : {})}}>Dashboard</button>
                         <button onClick={() => navigateTo('taskList')} style={{...styles.navLink, ...(page === 'taskList' ? styles.activeNavLink : {})}}>Tasks</button>
@@ -205,10 +206,71 @@ function TaskListPage({ onStartLabeling, buttonProps }) {
         try { const response = await fetch(`${API_URL}/api/tasks`); if (!response.ok) throw new Error('Failed to fetch tasks'); setTasks(await response.json()); } catch (err) { setError(err.message); } finally { setIsLoading(false); }
     }, []);
     useEffect(() => { fetchTasks(); const interval = setInterval(fetchTasks, 5000); return () => clearInterval(interval); }, [fetchTasks]);
-    const handleExport = async (taskId) => { try { const response = await fetch(`${API_URL}/api/tasks/${taskId}/export`); if (!response.ok) throw new Error((await response.json()).detail || 'Failed to download file.'); const disposition = response.headers.get('content-disposition'); let filename = `task_${taskId}_annotations.xlsx`; if (disposition?.includes('attachment')) { const matches = /filename="([^"]+)"/.exec(disposition); if (matches?.[1]) filename = matches[1]; } const blob = await response.blob(); const url = window.URL.createObjectURL(blob); const a = document.createElement('a'); a.style.display = 'none'; a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url); } catch (error) { alert(`Could not export: ${error.message}`); } };
+    
+    // --- MODIFIED CODE START (handleDelete function added) ---
+    const handleDelete = async (taskId) => {
+        if (!window.confirm("Are you sure you want to delete this task and all its data? This cannot be undone.")) {
+            return;
+        }
+        try {
+            const response = await fetch(`${API_URL}/api/tasks/${taskId}`, { method: 'DELETE' });
+            if (!response.ok) {
+                throw new Error((await response.json()).detail || 'Failed to delete task.');
+            }
+            fetchTasks(); // Refresh the list after deleting
+        } catch (error) {
+            alert(`Could not delete task: ${error.message}`);
+        }
+    };
+    // --- MODIFIED CODE END ---
+
+    // --- MODIFIED CODE START (handleExport updated for different formats) ---
+    const handleExport = async (taskId, format) => {
+        const endpoint = format === 'yolo'
+            ? `${API_URL}/api/tasks/${taskId}/export-yolo`
+            : `${API_URL}/api/tasks/${taskId}/export`;
+
+        try {
+            const response = await fetch(endpoint);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to download file.');
+            }
+            const disposition = response.headers.get('content-disposition');
+            let filename = `export.zip`; // Default filename
+            if (disposition?.includes('attachment')) {
+                const matches = /filename="([^"]+)"/.exec(disposition);
+                if (matches?.[1]) filename = matches[1];
+            }
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (error) {
+            alert(`Could not export: ${error.message}`);
+        }
+    };
+    // --- MODIFIED CODE END ---
+
     if (isLoading) return <div style={styles.loadingText}>Loading tasks...</div>;
     if (error) return <div style={styles.errorText}>Error: {error}</div>;
-    return (<>{processingTask && <ProcessTaskModal task={processingTask} onClose={() => setProcessingTask(null)} buttonProps={buttonProps} />}<div style={styles.taskListContainer}><h2 style={styles.pageTitle}>Tasks</h2><UploadTask onTaskUploaded={fetchTasks} buttonProps={buttonProps} /><div style={styles.taskList}>{tasks.map(task => (<div key={task.id} style={styles.taskItem}><div style={styles.taskInfo}><strong>{task.name}</strong><span style={{...styles.status, ...styles[task.status]}}>{task.status.replace(/_/g, ' ')}</span></div><div style={styles.taskActions}><button {...buttonProps} className="button primary" style={styles.button} onClick={() => onStartLabeling(task)}>{task.status === 'completed' ? 'View' : 'Label'}</button><button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => setProcessingTask(task)}>Process & Download</button><button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => handleExport(task.id)}>Export to Excel</button></div></div>))}</div></div></>);
+    return (<>{processingTask && <ProcessTaskModal task={processingTask} onClose={() => setProcessingTask(null)} buttonProps={buttonProps} />}<div style={styles.taskListContainer}><h2 style={styles.pageTitle}>Tasks</h2><UploadTask onTaskUploaded={fetchTasks} buttonProps={buttonProps} /><div style={styles.taskList}>{tasks.map(task => (<div key={task.id} style={styles.taskItem}><div style={styles.taskInfo}><strong>{task.name}</strong><span style={{...styles.status, ...styles[task.status]}}>{task.status.replace(/_/g, ' ')}</span></div>
+    {/* --- MODIFIED CODE START (Buttons updated) --- */}
+    <div style={styles.taskActions}>
+        <button {...buttonProps} className="button primary" style={styles.button} onClick={() => onStartLabeling(task)}>{task.status === 'completed' ? 'View' : 'Label'}</button>
+        <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => setProcessingTask(task)}>Process & Download</button>
+        <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => handleExport(task.id, 'excel')}>Export to Excel</button>
+        <button {...buttonProps} className="button secondary" style={{...styles.button, ...styles.buttonSecondary}} onClick={() => handleExport(task.id, 'yolo')}>Export to YOLO</button>
+        <button {...buttonProps} className="button secondary" style={{...styles.button, backgroundColor: '#c0392b'}} onClick={() => handleDelete(task.id)}>Delete</button>
+    </div>
+    {/* --- MODIFIED CODE END --- */}
+    </div>))}</div></div></>);
 }
 
 function StatCard({ title, value }) { return ( <div style={styles.statCard}><h3 style={styles.statCardTitle}>{title}</h3><p style={styles.statCardValue}>{value}</p></div>); }
@@ -705,6 +767,7 @@ const styles = {
     app: { fontFamily: 'Inter, "Segoe UI", sans-serif', color: '#e0e0e0', backgroundColor: '#1a1d21', minHeight: '100vh' },
     header: { backgroundColor: '#23272c', color: 'white', padding: '0 2rem', borderBottom: '1px solid #3a3f46' },
     headerContent: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '64px', maxWidth: '1400px', margin: '0 auto'},
+    logo: { scale: '0.5'},
     headerH1: { cursor: 'pointer', margin: 0, fontSize: '1.5rem', fontWeight: 600 },
     nav: { display: 'flex', gap: '0.5rem' },
     navLink: { backgroundColor: '#23272c', border: 'none', color: '#a0a0a0', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '1rem', transition: 'all 0.2s' },
@@ -740,7 +803,7 @@ const styles = {
     recentTaskItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 0', borderBottom: '1px solid #3a3f46' },
     recentTaskInfo: { display: 'flex', alignItems: 'center', gap: '1rem', overflow: 'hidden' },
     recentTaskName: { fontWeight: 500, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden'},
-    taskListContainer: { maxWidth: '900px', margin: '0 auto', animation: 'fadeIn 0.5s' },
+    taskListContainer: { margin: '0 auto', animation: 'fadeIn 0.5s' },
     uploadForm: { marginBottom: '2rem', padding: '1.5rem', border: '1px solid #3a3f46', borderRadius: '12px', backgroundColor: '#23272c', display: 'flex', gap: '1rem', alignItems: 'center' },
     fileName: { color: '#e0e0e0', fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 },
     taskList: { display: 'flex', flexDirection: 'column', gap: '1rem' },
@@ -751,7 +814,15 @@ const styles = {
     taskActions: { display: 'flex', flexWrap: 'wrap', gap: '0.75rem' },
     workspaceContainer: { position: 'relative', animation: 'fadeIn 0.5s' },
     backButton: { marginBottom: '1.5rem', border: '1px solid #4a4f56', backgroundColor: 'transparent' },
-    workspaceLayout: { display: 'flex', gap: '1.5rem', border: '1px solid #3a3f46', borderRadius: '12px', padding: '1.5rem', minHeight: '75vh', backgroundColor: '#23272c' },
+    workspaceLayout: { 
+        display: 'flex', 
+        gap: '1.5rem', 
+        border: '1px solid #3a3f46', 
+        borderRadius: '12px', 
+        padding: '1.5rem', 
+        height: '75vh',
+        backgroundColor: '#23272c' 
+    },
     imageListPanel: { width: '280px', flexShrink: 0, display: 'flex', flexDirection: 'column' },
     mainPanel: { flex: 1, display: 'flex', minWidth: 0 },
     panelTitle: { margin: '0 0 1rem 0', paddingBottom: '0.75rem', borderBottom: '1px solid #3a3f46', color: '#a0a0a0', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px' },
@@ -760,7 +831,15 @@ const styles = {
     selectedImageListItem: { backgroundColor: 'rgba(0, 168, 150, 0.2)', color: 'white', fontWeight: 600, border: '1px solid #00a896' },
     checkMark: { color: '#27ae60', fontWeight: 'bold', fontSize: '1.2rem' },
     canvasContainer: { flex: 1, position: 'relative', display: 'flex', justifyContent: 'center', alignItems: 'center', backgroundColor: '#1a1d21', borderRadius: '8px', overflow: 'hidden' },
-    canvas: { maxWidth: '100%', maxHeight: 'calc(75vh - 3rem)', cursor: 'crosshair', objectFit: 'contain', borderRadius: '4px' },
+    // --- MODIFIED CODE START (Canvas style updated) ---
+    canvas: { 
+        maxWidth: '100%', 
+        maxHeight: '100%', 
+        cursor: 'crosshair', 
+        objectFit: 'contain', 
+        borderRadius: '4px' 
+    },
+    // --- MODIFIED CODE END ---
     labelSelector: { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', backgroundColor: '#2c3035', padding: '1.5rem', border: '1px solid #4a4f56', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', zIndex: 10, width: '280px', animation: 'fadeIn 0.2s ease-out' },
     labelSelectorTitle: { margin: '0 0 1rem 0', color: 'white', fontSize: '1.1rem', fontWeight: 600 },
     labelSelectorActions: { marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' },
